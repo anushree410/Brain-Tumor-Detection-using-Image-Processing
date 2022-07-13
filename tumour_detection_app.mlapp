@@ -1,0 +1,321 @@
+classdef tumour_app < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        UIFigure            matlab.ui.Figure
+        ResultLabel         matlab.ui.control.Label
+        TumourDetectedLamp  matlab.ui.control.Lamp
+        ScanMRIButton       matlab.ui.control.Button
+        BrainTumourDetectionUsingImageProcessingLabel  matlab.ui.control.Label
+        LoadMRIButton       matlab.ui.control.Button
+        UIAxes2_6           matlab.ui.control.UIAxes
+        UIAxes2_5           matlab.ui.control.UIAxes
+        UIAxes2_4           matlab.ui.control.UIAxes
+        UIAxes2_3           matlab.ui.control.UIAxes
+        UIAxes2_2           matlab.ui.control.UIAxes
+        UIAxes2             matlab.ui.control.UIAxes
+        UIAxes              matlab.ui.control.UIAxes
+    end
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Button pushed function: LoadMRIButton
+        function LoadMRIButtonPushed(app, event)
+            global s;
+            [I,path]=uigetfile('*.jpg','Select the MRI image');
+            str=strcat(path,I);
+            s=imread(str);
+            %fprintf("Image loaded")
+            imshow(s, 'Parent', app.UIAxes);
+        end
+
+        % Button pushed function: ScanMRIButton
+        function ScanMRIButtonPushed(app, event)
+            global s
+            
+            num_iter = 10;
+            delta_t = 1/7;
+            kappa = 15;
+            option = 2;
+            disp('Preprocessing image please wait . . .');
+            inp = anisodiff(s,num_iter,delta_t,kappa,option);
+            inp = uint8(inp);
+            inp=imresize(inp,[256,256]);
+            if size(inp,3)>1
+                inp=rgb2gray(inp);
+            end
+            % Thresholding
+            sout=imresize(inp,[256,256]);
+            t0=60;
+            th=t0+((max(inp(:))+min(inp(:)))./2);
+            for i=1:1:size(inp,1)
+                for j=1:1:size(inp,2)
+                    if inp(i,j)>th
+                        sout(i,j)=1;
+                    else
+                        sout(i,j)=0;
+                    end
+                end
+            end
+            % Morphological Operation
+            label=bwlabel(sout);
+            stats=regionprops(logical(sout),'Solidity','Area','BoundingBox');
+            density=[stats.Solidity];
+            area=[stats.Area];
+            high_dense_area=density>0.6;
+            max_area=max(area(high_dense_area));
+            tumor_label=find(area==max_area);
+            tumor=ismember(label,tumor_label);
+            % Bounding box
+            box = stats(tumor_label);
+            wantedBox = box.BoundingBox;
+            % Getting Tumor Outline - image filling, eroding, subtracting
+            % erosion the walls by a few pixels
+            dilationAmount = 5;
+            rad = floor(dilationAmount);
+            [r,c] = size(tumor);
+            filledImage = imfill(tumor, 'holes');
+            for i=1:r
+                for j=1:c
+                    x1=i-rad;
+                    x2=i+rad;
+                    y1=j-rad;
+                    y2=j+rad;
+                    if x1<1
+                        x1=1;
+                    end
+                    if x2>r
+                        x2=r;
+                    end
+                    if y1<1
+                        y1=1;
+                    end
+                    if y2>c
+                        y2=c;
+                    end
+                    erodedImage(i,j) = min(min(filledImage(x1:x2,y1:y2)));
+                end
+            end
+            % subtracting eroded image from original BW image
+            tumorOutline=tumor;
+            tumorOutline(erodedImage)=0;
+            % Inserting the outline in filtered image in green color
+            rgb = inp(:,:,[1 1 1]);
+            red = rgb(:,:,1);
+            red(tumorOutline)=255;
+            green = rgb(:,:,2);
+            green(tumorOutline)=0;
+            blue = rgb(:,:,3);
+            blue(tumorOutline)=0;
+            tumorOutlineInserted(:,:,1) = red;
+            tumorOutlineInserted(:,:,2) = green;
+            tumorOutlineInserted(:,:,3) = blue;
+            
+            [height, width, ~] = size(inp);
+            s=imresize(inp,[height,width]);
+            imshow(s, 'Parent', app.UIAxes2);
+            title(app.UIAxes2,'Input Image','FontSize',20);
+            
+            %inp=imresize(inp,[height,width]);
+            imshow(inp, 'Parent', app.UIAxes2_2);
+            title(app.UIAxes2_2,'Filtered Image','FontSize',20);
+            
+            imshow(inp, 'Parent', app.UIAxes2_3);
+            title(app.UIAxes2_3,'Bounding Box','FontSize',20);
+            hold on;
+            rectangle(app.UIAxes2_3, 'Position', wantedBox,'EdgeColor','y')
+            hold off
+            %rectangle('Position',wantedBox,'EdgeColor','y');hold off;
+    
+            %tumor=imresize(tumor,[height,width]);
+            imshow(tumor, 'Parent', app.UIAxes2_4);
+            title(app.UIAxes2_4,'Tumor alone','FontSize',20);
+    
+            %tumorOutline=imresize(tumorOutline,[height,width]);
+            imshow(tumorOutline, 'Parent', app.UIAxes2_5);
+            title(app.UIAxes2_5,'Tumor Outline','FontSize',20);
+
+            %tumorOutlineInserted=imresize(tumorOutlineInserted,[height,width]);
+            imshow(tumorOutlineInserted, 'Parent', app.UIAxes2_6);
+            title(app.UIAxes2_6,'Tumor Outline','FontSize',20);
+            
+
+            if(max_area<75)
+                app.TumourDetectedLamp.Color='blue';
+                app.ResultLabel.Text="No tumour detected"
+            else
+                app.TumourDetectedLamp.Color='red';
+                app.ResultLabel.Text="Tumour detected"
+            end
+
+            function diff_im = anisodiff(im, num_iter, delta_t, kappa,option)
+                fprintf('Removing noise\n');
+                fprintf('Filtering Completed !!');
+                % Convert input image to double.
+                im = double(im);
+                % PDE (partial differential equation) initial condition.
+                diff_im = im;
+                % Center pixel distances.
+                dx = 1;
+                dy = 1;
+                dd = sqrt(2);
+                % 2D convolution masks - finite differences.
+                hN = [0 1 0; 0 -1 0; 0 0 0];
+                hS = [0 0 0; 0 -1 0; 0 1 0];
+                hE = [0 0 0; 0 -1 1; 0 0 0];
+                hW = [0 0 0; 1 -1 0; 0 0 0];
+                hNE = [0 0 1; 0 -1 0; 0 0 0];
+                hSE = [0 0 0; 0 -1 0; 0 0 1];
+                hSW = [0 0 0; 0 -1 0; 1 0 0];
+                hNW = [1 0 0; 0 -1 0; 0 0 0];
+                % Anisotropic diffusion.
+                for t = 1:num_iter
+                    % Finite differences. [imfilter(.,.,'conv') can be replaced by conv2(.,.,'same')]
+                    nablaN = imfilter(diff_im,hN,'conv');
+                    nablaS = imfilter(diff_im,hS,'conv');
+                    nablaW = imfilter(diff_im,hW,'conv');
+                    nablaE = imfilter(diff_im,hE,'conv');
+                    nablaNE = imfilter(diff_im,hNE,'conv');
+                    nablaSE = imfilter(diff_im,hSE,'conv');
+                    nablaSW = imfilter(diff_im,hSW,'conv');
+                    nablaNW = imfilter(diff_im,hNW,'conv');
+                    % Diffusion function.
+                    if option == 1
+                        cN = exp(-(nablaN/kappa).^2);
+                        cS = exp(-(nablaS/kappa).^2);
+                        cW = exp(-(nablaW/kappa).^2);
+                        cE = exp(-(nablaE/kappa).^2);
+                        cNE = exp(-(nablaNE/kappa).^2);
+                        cSE = exp(-(nablaSE/kappa).^2);
+                        cSW = exp(-(nablaSW/kappa).^2);
+                        cNW = exp(-(nablaNW/kappa).^2);
+                    elseif option == 2
+                        cN = 1./(1 + (nablaN/kappa).^2);
+                        cS = 1./(1 + (nablaS/kappa).^2);
+                        cW = 1./(1 + (nablaW/kappa).^2);
+                        cE = 1./(1 + (nablaE/kappa).^2);
+                        cNE = 1./(1 + (nablaNE/kappa).^2);
+                        cSE = 1./(1 + (nablaSE/kappa).^2);
+                        cSW = 1./(1 + (nablaSW/kappa).^2);
+                        cNW = 1./(1 + (nablaNW/kappa).^2);
+                    end
+                    % Discrete PDE solution.
+                    diff_im = diff_im + delta_t*(...
+                    (1/(dy^2))*cN.*nablaN + (1/(dy^2))*cS.*nablaS + ...
+                    (1/(dx^2))*cW.*nablaW + (1/(dx^2))*cE.*nablaE + ...
+                    (1/(dd^2))*cNE.*nablaNE + (1/(dd^2))*cSE.*nablaSE + ...
+                    (1/(dd^2))*cSW.*nablaSW + (1/(dd^2))*cNW.*nablaNW );
+                end
+            end
+
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create UIFigure and hide until all components are created
+            app.UIFigure = uifigure('Visible', 'off');
+            app.UIFigure.Position = [100 100 885 544];
+            app.UIFigure.Name = 'MATLAB App';
+
+            % Create UIAxes
+            app.UIAxes = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes, 'Z')
+            app.UIAxes.Position = [39 235 168 159];
+
+            % Create UIAxes2
+            app.UIAxes2 = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes2, 'Z')
+            app.UIAxes2.Position = [242 234 201 176];
+
+            % Create UIAxes2_2
+            app.UIAxes2_2 = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes2_2, 'Z')
+            app.UIAxes2_2.Position = [442 235 204 175];
+
+            % Create UIAxes2_3
+            app.UIAxes2_3 = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes2_3, 'Z')
+            app.UIAxes2_3.Position = [645 235 200 175];
+
+            % Create UIAxes2_4
+            app.UIAxes2_4 = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes2_4, 'Z')
+            app.UIAxes2_4.Position = [242 42 201 175];
+
+            % Create UIAxes2_5
+            app.UIAxes2_5 = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes2_5, 'Z')
+            app.UIAxes2_5.Position = [448 42 198 175];
+
+            % Create UIAxes2_6
+            app.UIAxes2_6 = uiaxes(app.UIFigure);
+            zlabel(app.UIAxes2_6, 'Z')
+            app.UIAxes2_6.Position = [645 42 200 175];
+
+            % Create LoadMRIButton
+            app.LoadMRIButton = uibutton(app.UIFigure, 'push');
+            app.LoadMRIButton.ButtonPushedFcn = createCallbackFcn(app, @LoadMRIButtonPushed, true);
+            app.LoadMRIButton.Position = [89 157 100 22];
+            app.LoadMRIButton.Text = 'Load MRI';
+
+            % Create BrainTumourDetectionUsingImageProcessingLabel
+            app.BrainTumourDetectionUsingImageProcessingLabel = uilabel(app.UIFigure);
+            app.BrainTumourDetectionUsingImageProcessingLabel.HorizontalAlignment = 'center';
+            app.BrainTumourDetectionUsingImageProcessingLabel.FontName = 'Times';
+            app.BrainTumourDetectionUsingImageProcessingLabel.FontSize = 22;
+            app.BrainTumourDetectionUsingImageProcessingLabel.FontWeight = 'bold';
+            app.BrainTumourDetectionUsingImageProcessingLabel.Position = [66 427 734 67];
+            app.BrainTumourDetectionUsingImageProcessingLabel.Text = 'Brain Tumour Detection Using Image Processing';
+
+            % Create ScanMRIButton
+            app.ScanMRIButton = uibutton(app.UIFigure, 'push');
+            app.ScanMRIButton.ButtonPushedFcn = createCallbackFcn(app, @ScanMRIButtonPushed, true);
+            app.ScanMRIButton.Position = [89 108 100 22];
+            app.ScanMRIButton.Text = 'Scan MRI';
+
+            % Create TumourDetectedLamp
+            app.TumourDetectedLamp = uilamp(app.UIFigure);
+            app.TumourDetectedLamp.Position = [169 67 20 20];
+
+            % Create ResultLabel
+            app.ResultLabel = uilabel(app.UIFigure);
+            app.ResultLabel.HorizontalAlignment = 'right';
+            app.ResultLabel.Position = [24 65 124 25];
+            app.ResultLabel.Text = 'Result:';
+
+            % Show the figure after all components are created
+            app.UIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = tumour_app
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.UIFigure)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.UIFigure)
+        end
+    end
+end
